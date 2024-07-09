@@ -1,13 +1,14 @@
 use std::fmt::Display;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Literal {
     String(String),
-    Number(u32),
+    Number(f32),
+    Bool(bool),
     Null,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum TokenType {
     LeftParen,
     RightParen,
@@ -50,12 +51,12 @@ pub enum TokenType {
     Eof,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Token {
-    ttype: TokenType,
-    lexeme: String,
-    literal: Literal,
-    line: u32,
+    pub ttype: TokenType,
+    pub lexeme: String,
+    pub literal: Literal,
+    pub line: u32,
 }
 
 impl Token {

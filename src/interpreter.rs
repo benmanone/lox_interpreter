@@ -1,11 +1,12 @@
 use crate::exit;
 use crate::io;
+use crate::parser::Parser;
 use crate::stdin;
 use crate::stdout;
 use crate::File;
-use crate::LoxError;
 use crate::Rc;
 use crate::Scanner;
+use std::error::Error;
 use std::io::{Read, Write};
 
 pub struct Interpreter {
@@ -26,7 +27,7 @@ impl Interpreter {
 
         match len {
             2 => {
-                let _run_result = i.run_file(i.args[1].clone())?;
+                i.run_file(i.args[1].clone())?;
             }
             _ => {
                 if len > 2 {
@@ -74,24 +75,34 @@ impl Interpreter {
         let mut scanner = Scanner::new(String::from(source));
         let result = scanner.scan_tokens();
 
-        if let Err(e) = result {
-            self.error(e);
-        } else if let Ok(tokens) = result {
-            for t in tokens {
-                println!("{}", t);
+        match result {
+            Err(err) => {
+                self.error(err);
+            }
+            Ok(tokens) => {
+                for t in tokens {
+                    println!("{}", t);
+                }
+
+                let mut parser = Parser::new(tokens.clone());
+                let expr = parser.parse();
+                println!("{:#?}", expr);
             }
         }
     }
 
-    pub fn error(&mut self, err: LoxError) {
+    pub fn error<T>(&mut self, err: T)
+    where
+        T: Error,
+    {
         self.report(err);
     }
 
-    pub fn report(&mut self, err: LoxError) {
-        println!(
-            "[line {}] Error {}: {}",
-            err.line, err.location, err.message
-        );
+    pub fn report<T>(&mut self, err: T)
+    where
+        T: Error,
+    {
+        println!("{err}");
         self.had_error = true
     }
 }

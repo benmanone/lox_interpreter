@@ -17,6 +17,8 @@ use error::*;
 pub mod interpreter;
 use interpreter::*;
 
+pub mod parser;
+
 fn main() {
     let args: Rc<[String]> = env::args().collect();
 
