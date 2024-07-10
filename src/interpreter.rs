@@ -1,108 +1,170 @@
-use crate::exit;
-use crate::io;
-use crate::parser::Parser;
-use crate::stdin;
-use crate::stdout;
-use crate::File;
-use crate::Rc;
-use crate::Scanner;
-use std::error::Error;
-use std::io::{Read, Write};
+use crate::parser::Expr;
+use crate::token::{Literal, TokenType};
+use crate::RuntimeError;
 
-pub struct Interpreter {
-    args: Rc<[String]>,
-    had_error: bool,
-}
+pub struct Interpreter {}
 
 impl Interpreter {
-    pub fn new(args: Rc<[String]>) -> Result<Self, io::Error> {
-        // decide to run a script or trigger prompt
+    pub fn new() -> Self {
+        Self {}
+    }
 
-        let mut i = Self {
-            args,
-            had_error: false,
-        };
+    pub fn interpret(&self, expression: Expr) -> Result<(), RuntimeError> {
+        let value = self.evaluate(expression)?;
+        println!("{}", value.as_string());
+        Ok(())
+    }
 
-        let len = i.args.len();
+    fn evaluate(&self, expression: Expr) -> Result<Literal, RuntimeError> {
+        match expression {
+            Expr::GroupingExpr(g) => self.evaluate(g.expression),
+            Expr::BinaryExpr(b) => self.eval_binary(*b),
+            Expr::UnaryExpr(u) => self.eval_unary(*u),
+            Expr::LitExpr(l) => Ok(l),
+        }
+    }
 
-        match len {
-            2 => {
-                i.run_file(i.args[1].clone())?;
-            }
-            _ => {
-                if len > 2 {
-                    println!("Usage: rlox [script]");
-                    exit(64);
-                } else {
-                    let _prompt = &i.run_prompt()?;
+    fn eval_binary(&self, b: crate::parser::Binary) -> Result<Literal, RuntimeError> {
+        let left = self.evaluate(b.left)?;
+        let right = self.evaluate(b.right)?;
+
+        // perform arithmetic, comparison / string concatenation
+        match (&left, &right) {
+            (Literal::Number(left_num), Literal::Number(right_num)) => match b.operator.ttype {
+                TokenType::Minus => return Ok(Literal::Number(left_num - right_num)),
+                TokenType::Plus => return Ok(Literal::Number(left_num + right_num)),
+                TokenType::Slash => {
+                    if right_num != &0.0 {
+                        return Ok(Literal::Number(left_num / right_num));
+                    } else {
+                        return Err(RuntimeError {
+                            token: b.operator,
+                            message: "Attempted division by zero".to_string(),
+                        });
+                    }
                 }
-            }
-        };
-
-        Ok(i)
-    }
-
-    pub fn run_file(&mut self, path: String) -> Result<String, io::Error> {
-        // read contents of file and run it
-        let mut file = File::open(path)?;
-        let mut contents = String::new();
-        file.read_to_string(&mut contents)?;
-        Interpreter::run(self, contents.as_str());
-
-        if self.had_error {
-            exit(65);
-        }
-
-        Ok(contents)
-    }
-
-    pub fn run_prompt(&mut self) -> Result<String, io::Error> {
-        loop {
-            let mut input = String::new();
-
-            print!("> ");
-
-            stdout().flush().unwrap();
-            stdin().read_line(&mut input).expect("Failed to read input");
-
-            self.run(input.as_str());
-
-            self.had_error = false;
-        }
-    }
-
-    pub fn run(&mut self, source: &str) {
-        let mut scanner = Scanner::new(String::from(source));
-        let result = scanner.scan_tokens();
-
-        match result {
-            Err(err) => {
-                self.error(err);
-            }
-            Ok(tokens) => {
-                for t in tokens {
-                    println!("{}", t);
+                TokenType::Star => return Ok(Literal::Number(left_num * right_num)),
+                TokenType::Greater => return Ok(Literal::Bool(left_num > right_num)),
+                TokenType::GreaterEqual => return Ok(Literal::Bool(left_num >= right_num)),
+                TokenType::Less => return Ok(Literal::Bool(left_num < right_num)),
+                TokenType::LessEqual => return Ok(Literal::Bool(left_num <= right_num)),
+                TokenType::BangEqual => return Ok(Literal::Bool(!self.is_equal(left, right))),
+                TokenType::EqualEqual => return Ok(Literal::Bool(self.is_equal(left, right))),
+                _ => {
+                    return Err(RuntimeError {
+                        token: b.operator,
+                        message: "Invalid operator used with two numbers".to_string(),
+                    })
                 }
-
-                let mut parser = Parser::new(tokens.clone());
-                let expr = parser.parse();
-                println!("{:#?}", expr);
+            },
+            (Literal::String(left_str), Literal::String(right_str)) => {
+                match b.operator.ttype {
+                    TokenType::Plus => {
+                        return Ok(Literal::String(left_str.to_owned() + right_str.as_str()))
+                    }
+                    TokenType::EqualEqual => return Ok(Literal::Bool(self.is_equal(left, right))),
+                    TokenType::BangEqual => return Ok(Literal::Bool(!self.is_equal(left, right))),
+                    _ => {
+                        return Err(RuntimeError {
+                            token: b.operator,
+                            message: "Invalid operator used with two strings".to_string(),
+                        })
+                    }
+                }
+                // implicit conversion of Numbers to Strings for concatenation or comparison
             }
+            (Literal::String(left_str), Literal::Number(right_num)) => match b.operator.ttype {
+                TokenType::Plus => {
+                    return Ok(Literal::String(
+                        left_str.to_owned() + right_num.to_string().as_str(),
+                    ))
+                }
+                TokenType::EqualEqual => {
+                    return Ok(Literal::Bool(
+                        self.is_equal(left, Literal::String(right_num.to_string())),
+                    ))
+                }
+                TokenType::BangEqual => {
+                    return Ok(Literal::Bool(
+                        !self.is_equal(left, Literal::String(right_num.to_string())),
+                    ))
+                }
+                _ => {
+                    return Err(RuntimeError {
+                        token: b.operator,
+                        message: "Invalid operator used with a string and a number".to_string(),
+                    })
+                }
+            },
+            (Literal::Number(left_num), Literal::String(right_str)) => match b.operator.ttype {
+                TokenType::Plus => {
+                    return Ok(Literal::String(left_num.to_string() + right_str.as_str()))
+                }
+                TokenType::EqualEqual => {
+                    return Ok(Literal::Bool(
+                        self.is_equal(Literal::String(left_num.to_string()), right),
+                    ))
+                }
+                TokenType::BangEqual => {
+                    return Ok(Literal::Bool(
+                        !self.is_equal(Literal::String(left_num.to_string()), right),
+                    ))
+                }
+                _ => {
+                    return Err(RuntimeError {
+                        token: b.operator,
+                        message: "Invalid operator used with a number and a string".to_string(),
+                    })
+                }
+            },
+            _ => Err(RuntimeError {
+                token: b.operator,
+                message: "Operands must be two numbers or two strings.".to_string(),
+            }),
         }
     }
 
-    pub fn error<T>(&mut self, err: T)
-    where
-        T: Error,
-    {
-        self.report(err);
+    fn eval_unary(&self, u: crate::parser::Unary) -> Result<Literal, RuntimeError> {
+        let right = self.evaluate(u.right)?;
+
+        if u.operator.ttype == TokenType::Minus {
+            if let Literal::Number(n) = right {
+                return Ok(Literal::Number(-n));
+            } else {
+                return Err(RuntimeError {
+                    token: u.operator,
+                    message: "Operand must be number".to_string(),
+                });
+            }
+        } else if u.operator.ttype == TokenType::Bang {
+            if let Literal::Bool(_) = right {
+                return Ok(Literal::Bool(!self.is_truthy(right)));
+            } else {
+                // unreachable as is_truthy() matches all types
+                return Ok(Literal::Null);
+            }
+        }
+
+        // unreachable
+        Ok(Literal::Null)
     }
 
-    pub fn report<T>(&mut self, err: T)
-    where
-        T: Error,
-    {
-        println!("{err}");
-        self.had_error = true
+    // false and nil are "falsey", everything else is "truthy"
+    fn is_truthy(&self, right: Literal) -> bool {
+        match right {
+            Literal::Bool(b) => b,
+            Literal::Null => false,
+            _ => true,
+        }
+    }
+
+    fn is_equal(&self, left: Literal, right: Literal) -> bool {
+        if let (Literal::Null, Literal::Null) = (&left, &right) {
+            return true;
+        } else if let Literal::Null = left {
+            return false;
+        } else {
+            return left == right;
+        }
     }
 }

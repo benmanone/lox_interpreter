@@ -14,13 +14,15 @@ use scanner::*;
 pub mod error;
 use error::*;
 
+pub mod lox;
+use lox::*;
+
 pub mod interpreter;
-use interpreter::*;
 
 pub mod parser;
 
 fn main() {
     let args: Rc<[String]> = env::args().collect();
 
-    let _int = Interpreter::new(args);
+    let _int = Lox::new(args);
 }

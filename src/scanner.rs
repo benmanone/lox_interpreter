@@ -35,13 +35,12 @@ impl Scanner {
             Literal::Null,
             self.line,
         ));
+
         Ok(&self.tokens)
     }
 
     pub fn scan_token(&mut self) -> Result<(), LoxError> {
         let c = self.advance();
-
-        let is_equals = self.matches('=');
 
         match c {
             '(' => {
@@ -86,6 +85,7 @@ impl Scanner {
             }
             // if the next token is =, change the tokentype
             '!' => {
+                let is_equals = self.matches('=');
                 self.add_token(if is_equals {
                     TokenType::BangEqual
                 } else {
@@ -94,6 +94,7 @@ impl Scanner {
                 Ok(())
             }
             '=' => {
+                let is_equals = self.matches('=');
                 self.add_token(if is_equals {
                     TokenType::EqualEqual
                 } else {
@@ -102,6 +103,7 @@ impl Scanner {
                 Ok(())
             }
             '<' => {
+                let is_equals = self.matches('=');
                 self.add_token(if is_equals {
                     TokenType::LessEqual
                 } else {
@@ -110,6 +112,7 @@ impl Scanner {
                 Ok(())
             }
             '>' => {
+                let is_equals = self.matches('=');
                 self.add_token(if is_equals {
                     TokenType::GreaterEqual
                 } else {
@@ -131,7 +134,6 @@ impl Scanner {
                         if self.is_at_end() {
                             return Err(LoxError {
                                 line: self.line,
-                                location: self.current as u32,
                                 message: String::from("Unclosed block comment."),
                             });
                         } else {
@@ -158,7 +160,7 @@ impl Scanner {
             _ => {
                 if c.is_ascii_digit() {
                     {
-                        self.number();
+                        self.number()?;
                         Ok(())
                     }
                 } else if c.is_alphabetic() {
@@ -169,7 +171,6 @@ impl Scanner {
                 } else {
                     Err(LoxError {
                         line: self.line,
-                        location: self.current as u32,
                         message: String::from("Unexpected character."),
                     })
                 }
@@ -207,7 +208,7 @@ impl Scanner {
         self.add_token(*ttype);
     }
 
-    pub fn number(&mut self) {
+    pub fn number(&mut self) -> Result<(), LoxError> {
         while self.peek().is_ascii_digit() {
             self.advance();
         } // check it is a valid floating point
@@ -219,15 +220,19 @@ impl Scanner {
             }
         }
 
-        self.add_token_literal(
-            TokenType::Number,
-            Literal::Number(
-                self.source.to_string()[self.start..self.current]
-                    .to_string()
-                    .parse()
-                    .unwrap(),
-            ),
-        );
+        let try_num = self.source.to_string()[self.start..self.current]
+            .to_string()
+            .parse();
+
+        if let Ok(num) = try_num {
+            self.add_token_literal(TokenType::Number, Literal::Number(num));
+            Ok(())
+        } else {
+            Err(LoxError {
+                line: self.line,
+                message: "No number".to_string(),
+            })
+        }
     }
 
     pub fn string(&mut self) -> Result<(), LoxError> {
@@ -241,7 +246,6 @@ impl Scanner {
         if self.is_at_end() {
             return Err(LoxError {
                 line: self.line,
-                location: self.current as u32,
                 message: String::from("Unterminated string."),
             });
         }
@@ -299,7 +303,7 @@ impl Scanner {
         self.source
             .chars()
             .nth(self.current - 1)
-            .expect("Failed to advance")
+            .expect("Failed to advance while scanning")
     }
 
     pub fn add_token(&mut self, ttype: TokenType) {

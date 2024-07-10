@@ -1,11 +1,22 @@
 use std::fmt::Display;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum Literal {
     String(String),
     Number(f32),
     Bool(bool),
     Null,
+}
+
+impl Literal {
+    pub fn as_string(&self) -> String {
+        match self {
+            Literal::String(s) => s.to_owned(),
+            Literal::Number(n) => n.to_string(),
+            Literal::Bool(b) => b.to_string(),
+            Literal::Null => "nil".to_string(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
