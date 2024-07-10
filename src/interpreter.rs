@@ -48,6 +48,8 @@ impl Interpreter {
                 TokenType::GreaterEqual => return Ok(Literal::Bool(left_num >= right_num)),
                 TokenType::Less => return Ok(Literal::Bool(left_num < right_num)),
                 TokenType::LessEqual => return Ok(Literal::Bool(left_num <= right_num)),
+                TokenType::EqualEqual => return Ok(Literal::Bool(self.is_equal(left, right))),
+                TokenType::BangEqual => return Ok(Literal::Bool(!self.is_equal(left, right))),
                 _ => {
                     return Err(RuntimeError {
                         token: b.operator,
@@ -60,6 +62,8 @@ impl Interpreter {
                     TokenType::Plus => {
                         return Ok(Literal::String(left_str.to_owned() + right_str.as_str()))
                     }
+                    TokenType::EqualEqual => return Ok(Literal::Bool(self.is_equal(left, right))),
+                    TokenType::BangEqual => return Ok(Literal::Bool(!self.is_equal(left, right))),
                     _ => {
                         return Err(RuntimeError {
                             token: b.operator,

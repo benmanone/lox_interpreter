@@ -56,8 +56,8 @@ impl Display for RuntimeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "Runtime error: {} [line {}]",
-            self.message, self.token.line
+            "Runtime error at {:?}: {} [line {}]",
+            self.token.ttype, self.message, self.token.line
         )
     }
 }
