@@ -5,14 +5,33 @@ use crate::token::*;
 use crate::error::ParseError;
 
 #[derive(Debug)]
+pub enum Stmt {
+    ExprStmt(Expr),
+    PrintStmt(Expr),
+    VarStmt(Var),
+}
+
+#[derive(Debug, PartialEq)]
 pub enum Expr {
     BinaryExpr(Box<Binary>),
     GroupingExpr(Box<Grouping>),
     UnaryExpr(Box<Unary>),
+    VarExpr(Box<Variable>),
     LitExpr(Literal),
 }
 
 #[derive(Debug)]
+pub struct Var {
+    pub name: Token,
+    pub initialiser: Expr,
+}
+
+#[derive(Debug, PartialEq)]
+pub struct Variable {
+    pub name: Token,
+}
+
+#[derive(Debug, PartialEq)]
 pub struct Binary {
     pub left: Expr,
     pub operator: Token,
@@ -29,7 +48,7 @@ impl Binary {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct Grouping {
     pub expression: Expr,
 }
@@ -40,7 +59,7 @@ impl Grouping {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct Unary {
     pub operator: Token,
     pub right: Expr,
@@ -62,18 +81,80 @@ impl Parser {
         Self { tokens, current: 0 }
     }
 
-    pub fn parse(&mut self) -> Result<Expr, ParseError> {
+    pub fn parse(&mut self) -> Result<Vec<Stmt>, ParseError> {
         // if let Ok(expr) = self.expression() {
         //     expr
         // } else {
         //     Expr::LitExpr(Literal::Null)
         // }
-        self.expression()
+        // self.expression()
+        let mut statements: Vec<Stmt> = vec![];
+
+        while !self.is_at_end() {
+            statements.push(self.declaration()?);
+        }
+
+        Ok(statements)
+    }
+
+    fn statement(&mut self) -> Result<Stmt, ParseError> {
+        if self.matches(&[Print]) {
+            return self.print_statement();
+        }
+
+        self.expression_statement()
+    }
+
+    fn print_statement(&mut self) -> Result<Stmt, ParseError> {
+        let value = self.expression()?;
+        self.consume(Semicolon, "Expect ';' after value".to_string())?;
+        Ok(Stmt::PrintStmt(value))
+    }
+
+    // varDecl → "var" IDENTIFIER ( "=" expression )? ";" ;
+    fn var_declaration(&mut self) -> Result<Stmt, ParseError> {
+        let name = self
+            .consume(Identifier, "Expect variable name".to_string())?
+            .clone();
+        let mut initialiser = Expr::LitExpr(Literal::Null);
+
+        if self.matches(&[Equal]) {
+            initialiser = self.expression()?;
+        }
+
+        self.consume(
+            Semicolon,
+            "Expect ; after variable declaration.".to_string(),
+        )?;
+
+        Ok(Stmt::VarStmt(Var { name, initialiser }))
+    }
+
+    fn expression_statement(&mut self) -> Result<Stmt, ParseError> {
+        let value = self.expression()?;
+        self.consume(Semicolon, "Expect ';' after value".to_string())?;
+        Ok(Stmt::ExprStmt(value))
     }
 
     // expression → equality ;
     fn expression(&mut self) -> Result<Expr, ParseError> {
         self.equality()
+    }
+
+    // declaration → varDecl | statement ;
+    fn declaration(&mut self) -> Result<Stmt, ParseError> {
+        if self.matches(&[Var]) {
+            self.var_declaration()
+        } else {
+            let stmt_result = self.statement();
+
+            if stmt_result.is_ok() {
+                stmt_result
+            } else {
+                self.synchronise();
+                stmt_result
+            }
+        }
     }
 
     // equality → comparison ( ( "!=" | "==" ) comparison )* ;
@@ -159,6 +240,10 @@ impl Parser {
             return Ok(Expr::LitExpr(Literal::Null));
         } else if self.matches(&[Number, String]) {
             return Ok(Expr::LitExpr(self.previous().clone().literal));
+        } else if self.matches(&[Identifier]) {
+            return Ok(Expr::VarExpr(Box::new(Variable {
+                name: self.previous().clone(),
+            })));
         }
         // must find a right paren or throw error
         else if self.matches(&[LeftParen]) {

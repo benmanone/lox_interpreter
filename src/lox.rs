@@ -88,17 +88,16 @@ impl Lox {
                 self.error(err);
             }
             Ok(tokens) => {
-                for t in tokens {
-                    println!("{}", t);
-                }
+                // for t in tokens {
+                //     println!("{}", t);
+                // }
 
                 let mut parser = Parser::new(tokens.clone());
                 let result = parser.parse();
 
-                if let Ok(expr) = result {
-                    println!("{:#?}", expr);
-
-                    let interpret_result = self.interpreter.interpret(expr);
+                if let Ok(stmts) = result {
+                    // println!("{:#?}", stmts);
+                    let interpret_result = self.interpreter.interpret(stmts);
 
                     if let Err(err) = interpret_result {
                         self.runtime_error(err);
