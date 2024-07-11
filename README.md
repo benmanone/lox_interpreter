@@ -1,2 +1,2 @@
 # lox_interpreter
-A Rust implementation of an interpreter for the [Lox language](https://github.com/munificent/craftinginterpreters), following the guide Crafting Interpreters by Bob Nystrom.
+A Rust implementation of an interpreter for the [Lox language](https://github.com/munificent/craftinginterpreters), following the guide Crafting Interpreters by Bob Nystrom for writing interpreters in Java and C. This is a work-in-progress Rust version of the book's first implementation of a Lox recursive-descent interpreter. An version of the second bytecode compiler will also be stored here once written.
