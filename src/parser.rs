@@ -9,6 +9,7 @@ pub enum Stmt {
     ExprStmt(Expr),
     PrintStmt(Expr),
     VarStmt(Var),
+    BlockStmt(Block),
 }
 
 #[derive(Debug, PartialEq)]
@@ -19,6 +20,11 @@ pub enum Expr {
     UnaryExpr(Box<Unary>),
     VarExpr(Box<Variable>),
     LitExpr(Literal),
+}
+
+#[derive(Debug)]
+pub struct Block {
+    pub statements: Vec<Stmt>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -106,10 +112,24 @@ impl Parser {
 
     fn statement(&mut self) -> Result<Stmt, ParseError> {
         if self.matches(&[Print]) {
-            return self.print_statement();
+            self.print_statement()
+        } else if self.matches(&[LeftBrace]) {
+            Ok(Stmt::BlockStmt(self.block()?))
+        } else {
+            self.expression_statement()
+        }
+    }
+
+    // block → "{" declaration* "}" ;
+    fn block(&mut self) -> Result<Block, ParseError> {
+        let mut statements: Vec<Stmt> = vec![];
+
+        while !self.check(RightBrace) && !self.is_at_end() {
+            statements.push(self.declaration()?);
         }
 
-        self.expression_statement()
+        self.consume(RightBrace, "Expect } after block.".to_string())?;
+        Ok(Block { statements })
     }
 
     fn print_statement(&mut self) -> Result<Stmt, ParseError> {
@@ -302,6 +322,7 @@ impl Parser {
         false
     }
 
+    // advance if of certain type, otherwise throw error
     fn consume(
         &mut self,
         ttype: TokenType,

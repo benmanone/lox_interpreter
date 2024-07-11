@@ -5,20 +5,30 @@ use crate::{
     RuntimeError,
 };
 
+#[derive(Clone)]
 pub struct Environment {
+    enclosing: Option<Box<Environment>>,
     values: HashMap<String, Literal>,
 }
 
 impl Environment {
-    pub fn new() -> Self {
-        Self {
-            values: HashMap::new(),
+    // global environment will pass in None for enclosing
+    pub fn new(enclosing: Option<Environment>) -> Self {
+        if let Some(enc) = enclosing {
+            Self {
+                enclosing: Some(Box::new(enc)),
+                values: HashMap::new(),
+            }
+        } else {
+            Self {
+                enclosing: None,
+                values: HashMap::new(),
+            }
         }
     }
 
     pub fn define(&mut self, name: String, value: Literal) {
         self.values.insert(name, value);
-        // println!("{:?}", self.values);
     }
 
     // can't create a new variable
@@ -26,6 +36,8 @@ impl Environment {
         if self.values.contains_key(&name.lexeme) {
             self.values.insert(name.lexeme, value);
             Ok(())
+        } else if let Some(mut enc) = self.enclosing.clone() {
+            enc.assign(name, value)
         } else {
             Err(RuntimeError {
                 token: name.clone(),
@@ -36,10 +48,12 @@ impl Environment {
 
     pub fn get(&self, name: Token) -> Result<Literal, RuntimeError> {
         if self.values.contains_key(&name.lexeme) {
-            // println!("{:?}", self.values);
             Ok(self.values.get(&name.lexeme).unwrap().clone())
+        }
+        // recursively search for the variable in enclosing environment
+        else if let Some(enc) = &self.enclosing {
+            enc.get(name)
         } else {
-            // println!("{:?}", self.values);
             Err(RuntimeError {
                 token: name.clone(),
                 message: format!("Undefined variable '{}'.", &name.lexeme),

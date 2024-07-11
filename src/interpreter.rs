@@ -1,5 +1,6 @@
 use crate::environment::Environment;
 use crate::parser::Assignment;
+use crate::parser::Block;
 use crate::parser::Expr;
 use crate::parser::Stmt;
 use crate::parser::Var;
@@ -14,7 +15,7 @@ pub struct Interpreter {
 impl Interpreter {
     pub fn new() -> Self {
         Self {
-            environment: Environment::new(),
+            environment: Environment::new(None),
         }
     }
 
@@ -30,7 +31,25 @@ impl Interpreter {
             Stmt::ExprStmt(expr) => self.evaluate(expr),
             Stmt::PrintStmt(expr) => self.eval_print_stmt(expr),
             Stmt::VarStmt(var) => self.eval_var_stmt(var),
+            Stmt::BlockStmt(block) => self.eval_block(block),
         }
+    }
+
+    fn execute_block(
+        &mut self,
+        statements: Vec<Stmt>,
+        env: Environment,
+    ) -> Result<Literal, RuntimeError> {
+        let previous = self.environment.clone();
+
+        self.environment = env;
+
+        for stmt in statements {
+            self.execute(stmt)?;
+        }
+
+        self.environment = previous;
+        Ok(Literal::Null)
     }
 
     fn evaluate(&mut self, expression: Expr) -> Result<Literal, RuntimeError> {
@@ -44,9 +63,17 @@ impl Interpreter {
         }
     }
 
+    fn eval_block(&mut self, block: Block) -> Result<Literal, RuntimeError> {
+        self.execute_block(
+            block.statements,
+            Environment::new(Some(self.environment.clone())),
+        )
+    }
+
     fn eval_assign(&mut self, assignment: Assignment) -> Result<Literal, RuntimeError> {
         let value = self.evaluate(assignment.value)?;
         self.environment.assign(assignment.name, value.clone())?;
+        // allows nesting of assign expressions inside other expressions e.g. print a = 2;
         Ok(value)
     }
 
