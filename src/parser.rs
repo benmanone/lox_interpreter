@@ -13,11 +13,18 @@ pub enum Stmt {
 
 #[derive(Debug, PartialEq)]
 pub enum Expr {
+    AssignExpr(Box<Assignment>),
     BinaryExpr(Box<Binary>),
     GroupingExpr(Box<Grouping>),
     UnaryExpr(Box<Unary>),
     VarExpr(Box<Variable>),
     LitExpr(Literal),
+}
+
+#[derive(Debug, PartialEq)]
+pub struct Assignment {
+    pub name: Token,
+    pub value: Expr,
 }
 
 #[derive(Debug)]
@@ -138,7 +145,31 @@ impl Parser {
 
     // expression → equality ;
     fn expression(&mut self) -> Result<Expr, ParseError> {
-        self.equality()
+        self.assignment()
+    }
+
+    // assignment → IDENTIFIER "=" assignment | equality ;
+    fn assignment(&mut self) -> Result<Expr, ParseError> {
+        // LHS is any expression of higher precedence
+        // as all LHSs of assignments are also valid expressions
+        let expr = self.equality()?;
+
+        if self.matches(&[Equal]) {
+            // recursively call the function as assignment is right-associative
+            let value = self.assignment()?;
+
+            // only return an assignment if assigning to variable
+            if let Expr::VarExpr(var) = expr {
+                let name = var.name;
+                return Ok(Expr::AssignExpr(Box::new(Assignment { name, value })));
+            }
+            Err(ParseError {
+                token: self.previous().clone(),
+                message: "Invalid assignment target.".to_string(),
+            })
+        } else {
+            Ok(expr)
+        }
     }
 
     // declaration → varDecl | statement ;
@@ -259,7 +290,7 @@ impl Parser {
         }
     }
 
-    // checks if current token has any of the given types
+    // checks if current token has any of the given types before advancing
     fn matches(&mut self, ttypes: &[TokenType]) -> bool {
         for tt in ttypes.iter() {
             if self.check(*tt) {

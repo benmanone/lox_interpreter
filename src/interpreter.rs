@@ -1,4 +1,5 @@
 use crate::environment::Environment;
+use crate::parser::Assignment;
 use crate::parser::Expr;
 use crate::parser::Stmt;
 use crate::parser::Var;
@@ -32,14 +33,21 @@ impl Interpreter {
         }
     }
 
-    fn evaluate(&self, expression: Expr) -> Result<Literal, RuntimeError> {
+    fn evaluate(&mut self, expression: Expr) -> Result<Literal, RuntimeError> {
         match expression {
             Expr::GroupingExpr(g) => self.evaluate(g.expression),
             Expr::BinaryExpr(b) => self.eval_binary(*b),
             Expr::UnaryExpr(u) => self.eval_unary(*u),
             Expr::VarExpr(v) => self.eval_var(*v),
+            Expr::AssignExpr(a) => self.eval_assign(*a),
             Expr::LitExpr(l) => Ok(l),
         }
+    }
+
+    fn eval_assign(&mut self, assignment: Assignment) -> Result<Literal, RuntimeError> {
+        let value = self.evaluate(assignment.value)?;
+        self.environment.assign(assignment.name, value.clone())?;
+        Ok(value)
     }
 
     fn eval_var(&self, var: Variable) -> Result<Literal, RuntimeError> {
@@ -57,13 +65,13 @@ impl Interpreter {
         Ok(Literal::Null)
     }
 
-    fn eval_print_stmt(&self, expr: Expr) -> Result<Literal, RuntimeError> {
+    fn eval_print_stmt(&mut self, expr: Expr) -> Result<Literal, RuntimeError> {
         let value = self.evaluate(expr)?;
         println!("{}", value.as_string());
         Ok(value)
     }
 
-    fn eval_binary(&self, b: crate::parser::Binary) -> Result<Literal, RuntimeError> {
+    fn eval_binary(&mut self, b: crate::parser::Binary) -> Result<Literal, RuntimeError> {
         let left = self.evaluate(b.left)?;
         let right = self.evaluate(b.right)?;
 
@@ -147,7 +155,7 @@ impl Interpreter {
         }
     }
 
-    fn eval_unary(&self, u: crate::parser::Unary) -> Result<Literal, RuntimeError> {
+    fn eval_unary(&mut self, u: crate::parser::Unary) -> Result<Literal, RuntimeError> {
         let right = self.evaluate(u.right)?;
 
         if u.operator.ttype == TokenType::Minus {

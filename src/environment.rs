@@ -21,6 +21,19 @@ impl Environment {
         // println!("{:?}", self.values);
     }
 
+    // can't create a new variable
+    pub fn assign(&mut self, name: Token, value: Literal) -> Result<(), RuntimeError> {
+        if self.values.contains_key(&name.lexeme) {
+            self.values.insert(name.lexeme, value);
+            Ok(())
+        } else {
+            Err(RuntimeError {
+                token: name.clone(),
+                message: format!("Undefined variable '{}'.", &name.lexeme),
+            })
+        }
+    }
+
     pub fn get(&self, name: Token) -> Result<Literal, RuntimeError> {
         if self.values.contains_key(&name.lexeme) {
             // println!("{:?}", self.values);
