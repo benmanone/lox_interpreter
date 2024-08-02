@@ -17,6 +17,15 @@ impl Literal {
             Literal::Null => "nil".to_string(),
         }
     }
+
+    // false and nil are "falsey", everything else is "truthy"
+    pub fn is_truthy(&self) -> bool {
+        match self {
+            Literal::Bool(b) => *b,
+            Literal::Null => false,
+            _ => true,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]

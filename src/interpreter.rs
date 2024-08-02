@@ -1,21 +1,28 @@
-use crate::environment::Environment;
+use crate::environment::*;
 use crate::parser::Assignment;
 use crate::parser::Block;
 use crate::parser::Expr;
+use crate::parser::If;
+use crate::parser::Logic;
 use crate::parser::Stmt;
 use crate::parser::Var;
 use crate::parser::Variable;
+use crate::parser::While;
 use crate::token::{Literal, TokenType};
 use crate::RuntimeError;
+use std::cell::RefCell;
+use std::rc::Rc;
 
 pub struct Interpreter {
-    environment: Environment,
+    environment: Rc<RefCell<Environment>>,
 }
 
 impl Interpreter {
     pub fn new() -> Self {
         Self {
-            environment: Environment::new(None),
+            // need to use RefCell to legally keep track of data in enclosing environments
+            // now clones of `environment` still reference the same data
+            environment: Rc::new(RefCell::new(Environment::new(None))),
         }
     }
 
@@ -30,18 +37,20 @@ impl Interpreter {
         match stmt {
             Stmt::ExprStmt(expr) => self.evaluate(expr),
             Stmt::PrintStmt(expr) => self.eval_print_stmt(expr),
+            Stmt::IfStmt(ifstmt) => self.eval_if_stmt(*ifstmt),
+            Stmt::WhileStmt(whilestmt) => self.eval_while_stmt(*whilestmt),
             Stmt::VarStmt(var) => self.eval_var_stmt(var),
             Stmt::BlockStmt(block) => self.eval_block(block),
+            _ => Ok(Literal::Null),
         }
     }
 
     fn execute_block(
         &mut self,
         statements: Vec<Stmt>,
-        env: Environment,
+        env: Rc<RefCell<Environment>>,
     ) -> Result<Literal, RuntimeError> {
         let previous = self.environment.clone();
-
         self.environment = env;
 
         for stmt in statements {
@@ -59,26 +68,56 @@ impl Interpreter {
             Expr::UnaryExpr(u) => self.eval_unary(*u),
             Expr::VarExpr(v) => self.eval_var(*v),
             Expr::AssignExpr(a) => self.eval_assign(*a),
+            Expr::LogicExpr(l) => self.eval_logic(*l),
             Expr::LitExpr(l) => Ok(l),
         }
     }
 
     fn eval_block(&mut self, block: Block) -> Result<Literal, RuntimeError> {
-        self.execute_block(
-            block.statements,
-            Environment::new(Some(self.environment.clone())),
-        )
+        self.execute_block(block.statements, self.environment.clone())
     }
 
     fn eval_assign(&mut self, assignment: Assignment) -> Result<Literal, RuntimeError> {
         let value = self.evaluate(assignment.value)?;
-        self.environment.assign(assignment.name, value.clone())?;
+        self.environment
+            .borrow_mut()
+            .assign(assignment.name, value.clone())?;
         // allows nesting of assign expressions inside other expressions e.g. print a = 2;
         Ok(value)
     }
 
     fn eval_var(&self, var: Variable) -> Result<Literal, RuntimeError> {
-        self.environment.get(var.name)
+        self.environment.borrow_mut().get(var.name)
+    }
+
+    fn eval_logic(&mut self, logic: Logic) -> Result<Literal, RuntimeError> {
+        let left = self.evaluate(logic.left)?;
+
+        // check to see if it is possible to short circuit (if left is already true in an or statement)
+        if (logic.operator.ttype == TokenType::Or && left.is_truthy()) || !left.is_truthy() {
+            Ok(left)
+        } else {
+            self.evaluate(logic.right)
+        }
+    }
+
+    fn eval_if_stmt(&mut self, ifstmt: If) -> Result<Literal, RuntimeError> {
+        if self.evaluate(ifstmt.condition)?.is_truthy() {
+            self.execute(ifstmt.then_branch)
+        } else if ifstmt.else_branch != Stmt::ExprStmt(Expr::LitExpr(Literal::Null)) {
+            self.execute(ifstmt.else_branch)
+        } else {
+            Ok(Literal::Null)
+        }
+    }
+
+    fn eval_while_stmt(&mut self, whilestmt: While) -> Result<Literal, RuntimeError> {
+        let condition = whilestmt.condition;
+
+        while self.evaluate(condition.clone())?.is_truthy() {
+            self.execute(whilestmt.body.clone())?;
+        }
+        Ok(Literal::Null)
     }
 
     fn eval_var_stmt(&mut self, var: Var) -> Result<Literal, RuntimeError> {
@@ -88,7 +127,7 @@ impl Interpreter {
             value = self.evaluate(var.initialiser)?;
         }
 
-        self.environment.define(var.name.lexeme, value);
+        self.environment.borrow_mut().define(var.name.lexeme, value);
         Ok(Literal::Null)
     }
 
@@ -196,7 +235,7 @@ impl Interpreter {
             }
         } else if u.operator.ttype == TokenType::Bang {
             if let Literal::Bool(_) = right {
-                return Ok(Literal::Bool(!self.is_truthy(right)));
+                return Ok(Literal::Bool(!right.is_truthy()));
             } else {
                 // unreachable as is_truthy() matches all types
                 return Ok(Literal::Null);
@@ -205,15 +244,6 @@ impl Interpreter {
 
         // unreachable
         Ok(Literal::Null)
-    }
-
-    // false and nil are "falsey", everything else is "truthy"
-    fn is_truthy(&self, right: Literal) -> bool {
-        match right {
-            Literal::Bool(b) => b,
-            Literal::Null => false,
-            _ => true,
-        }
     }
 
     fn is_equal(&self, left: Literal, right: Literal) -> bool {

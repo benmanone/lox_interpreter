@@ -5,7 +5,7 @@ use crate::{
     RuntimeError,
 };
 
-#[derive(Clone)]
+#[derive(Debug)]
 pub struct Environment {
     enclosing: Option<Box<Environment>>,
     values: HashMap<String, Literal>,
@@ -36,7 +36,7 @@ impl Environment {
         if self.values.contains_key(&name.lexeme) {
             self.values.insert(name.lexeme, value);
             Ok(())
-        } else if let Some(mut enc) = self.enclosing.clone() {
+        } else if let Some(ref mut enc) = self.enclosing {
             enc.assign(name, value)
         } else {
             Err(RuntimeError {
@@ -51,7 +51,7 @@ impl Environment {
             Ok(self.values.get(&name.lexeme).unwrap().clone())
         }
         // recursively search for the variable in enclosing environment
-        else if let Some(enc) = &self.enclosing {
+        else if let Some(ref enc) = self.enclosing {
             enc.get(name)
         } else {
             Err(RuntimeError {

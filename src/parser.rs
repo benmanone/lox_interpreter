@@ -4,47 +4,79 @@ use crate::token::*;
 
 use crate::error::ParseError;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum Stmt {
     ExprStmt(Expr),
     PrintStmt(Expr),
+    ForStmt(Box<For>),
+    IfStmt(Box<If>),
+    WhileStmt(Box<While>),
     VarStmt(Var),
     BlockStmt(Block),
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum Expr {
     AssignExpr(Box<Assignment>),
     BinaryExpr(Box<Binary>),
     GroupingExpr(Box<Grouping>),
     UnaryExpr(Box<Unary>),
     VarExpr(Box<Variable>),
+    LogicExpr(Box<Logic>),
     LitExpr(Literal),
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct Block {
     pub statements: Vec<Stmt>,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct Assignment {
     pub name: Token,
     pub value: Expr,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Clone)]
+pub struct Logic {
+    pub left: Expr,
+    pub operator: Token,
+    pub right: Expr,
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub struct If {
+    pub condition: Expr,
+    pub then_branch: Stmt,
+    pub else_branch: Stmt,
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub struct For {
+    pub initialiser: Var,
+    pub condition: Stmt,
+    pub increment: Option<Expr>,
+    pub body: Stmt,
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub struct While {
+    pub condition: Expr,
+    pub body: Stmt,
+}
+
+#[derive(Debug, PartialEq, Clone)]
 pub struct Var {
     pub name: Token,
     pub initialiser: Expr,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct Variable {
     pub name: Token,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct Binary {
     pub left: Expr,
     pub operator: Token,
@@ -61,7 +93,7 @@ impl Binary {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct Grouping {
     pub expression: Expr,
 }
@@ -72,7 +104,7 @@ impl Grouping {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct Unary {
     pub operator: Token,
     pub right: Expr,
@@ -113,8 +145,14 @@ impl Parser {
     fn statement(&mut self) -> Result<Stmt, ParseError> {
         if self.matches(&[Print]) {
             self.print_statement()
+        } else if self.matches(&[While]) {
+            self.while_statement()
         } else if self.matches(&[LeftBrace]) {
             Ok(Stmt::BlockStmt(self.block()?))
+        } else if self.matches(&[If]) {
+            self.if_statement()
+        } else if self.matches(&[For]) {
+            self.for_statement()
         } else {
             self.expression_statement()
         }
@@ -130,6 +168,95 @@ impl Parser {
 
         self.consume(RightBrace, "Expect } after block.".to_string())?;
         Ok(Block { statements })
+    }
+
+    // whileStmt → "while" "(" expression ")" statement ;
+    fn while_statement(&mut self) -> Result<Stmt, ParseError> {
+        self.consume(LeftParen, "Expect ( after 'while'.".to_string())?;
+        let condition = self.expression()?;
+        self.consume(RightParen, "Expect ) after 'while'.".to_string())?;
+        let body = self.statement()?;
+
+        Ok(Stmt::WhileStmt(Box::new(While { condition, body })))
+    }
+
+    // ifStmt → "if" "(" expression ")" statement ( "else" statement )? ;
+    fn if_statement(&mut self) -> Result<Stmt, ParseError> {
+        self.consume(LeftParen, "Expect ( after if".to_string())?;
+        let condition = self.expression()?;
+        self.consume(RightParen, "Expect ) after condition".to_string())?;
+
+        let then_branch = self.statement()?;
+        // innermost call find the else
+        // so else is bound to nearest preceding if
+        let else_branch = if self.matches(&[Else]) {
+            self.statement()?
+        } else {
+            Stmt::ExprStmt(Expr::LitExpr(Literal::Null))
+        };
+
+        Ok(Stmt::IfStmt(Box::new(If {
+            condition,
+            then_branch,
+            else_branch,
+        })))
+    }
+
+    // convert a for statement into the equivalent while statement, adding the declaration and increment on either side
+    fn for_statement(&mut self) -> Result<Stmt, ParseError> {
+        self.consume(LeftParen, "Expect '(' after for statement".to_string())?;
+
+        let initialiser = if self.matches(&[Semicolon]) {
+            None
+        } else if self.matches(&[Var]) {
+            Some(self.var_declaration()?)
+        } else {
+            Some(self.expression_statement()?)
+        };
+
+        let condition = if !self.check(Semicolon) {
+            Some(self.expression()?)
+        } else {
+            None
+        };
+        self.consume(Semicolon, "Expect ; after loop condition".to_string())?;
+
+        let increment = if !self.check(RightParen) {
+            Some(self.expression()?)
+        } else {
+            None
+        };
+        self.consume(RightParen, "Expect ) after for clauses".to_string())?;
+
+        let mut body = self.statement()?;
+
+        // adds the increment, e.g. i++, to the end of the body so it gets evaluated
+        if let Some(inc) = increment {
+            body = Stmt::BlockStmt(Block {
+                statements: vec![body, Stmt::ExprStmt(inc)],
+            });
+        }
+
+        // wraps the body in a while statement
+        body = match condition {
+            None => Stmt::WhileStmt(Box::new(While {
+                condition: Expr::LitExpr(Literal::Bool(true)),
+                body,
+            })),
+            Some(cond) => Stmt::WhileStmt(Box::new(While {
+                condition: cond,
+                body,
+            })),
+        };
+
+        // adds the declaration, e.g. var i = 1 to before the while loop
+        if let Some(init) = initialiser {
+            body = Stmt::BlockStmt(Block {
+                statements: vec![init, body],
+            });
+        };
+
+        Ok(body)
     }
 
     fn print_statement(&mut self) -> Result<Stmt, ParseError> {
@@ -168,11 +295,11 @@ impl Parser {
         self.assignment()
     }
 
-    // assignment → IDENTIFIER "=" assignment | equality ;
+    // assignment → IDENTIFIER "=" assignment | logic_or ;
     fn assignment(&mut self) -> Result<Expr, ParseError> {
         // LHS is any expression of higher precedence
         // as all LHSs of assignments are also valid expressions
-        let expr = self.equality()?;
+        let expr = self.or()?;
 
         if self.matches(&[Equal]) {
             // recursively call the function as assignment is right-associative
@@ -190,6 +317,40 @@ impl Parser {
         } else {
             Ok(expr)
         }
+    }
+
+    // logic_or → logic_and ( "or" logic_and )* ;
+    fn or(&mut self) -> Result<Expr, ParseError> {
+        let mut expr = self.and()?;
+
+        while self.matches(&[Or]) {
+            let operator = self.previous().clone();
+            let right = self.and()?;
+            expr = Expr::LogicExpr(Box::new(Logic {
+                left: expr,
+                operator,
+                right,
+            }));
+        }
+
+        Ok(expr)
+    }
+
+    // logic_and → equality ( "and" equality )* ;
+    fn and(&mut self) -> Result<Expr, ParseError> {
+        let mut expr = self.equality()?;
+
+        while self.matches(&[And]) {
+            let operator = self.previous().clone();
+            let right = self.equality()?;
+            expr = Expr::LogicExpr(Box::new(Logic {
+                left: expr,
+                operator,
+                right,
+            }));
+        }
+
+        Ok(expr)
     }
 
     // declaration → varDecl | statement ;
