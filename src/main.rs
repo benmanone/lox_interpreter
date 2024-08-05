@@ -23,6 +23,8 @@ pub mod parser;
 
 pub mod environment;
 
+pub mod callable;
+
 fn main() {
     let args: Rc<[String]> = env::args().collect();
 

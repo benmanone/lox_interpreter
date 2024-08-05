@@ -1,4 +1,7 @@
+use crate::RuntimeBreak;
+use std::cell::RefCell;
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use crate::{
     token::{Literal, Token},
@@ -7,16 +10,16 @@ use crate::{
 
 #[derive(Debug)]
 pub struct Environment {
-    enclosing: Option<Box<Environment>>,
+    enclosing: Option<Rc<RefCell<Environment>>>,
     values: HashMap<String, Literal>,
 }
 
 impl Environment {
     // global environment will pass in None for enclosing
-    pub fn new(enclosing: Option<Environment>) -> Self {
+    pub fn new(enclosing: Option<Rc<RefCell<Environment>>>) -> Self {
         if let Some(enc) = enclosing {
             Self {
-                enclosing: Some(Box::new(enc)),
+                enclosing: Some(enc),
                 values: HashMap::new(),
             }
         } else {
@@ -32,17 +35,17 @@ impl Environment {
     }
 
     // can't create a new variable
-    pub fn assign(&mut self, name: Token, value: Literal) -> Result<(), RuntimeError> {
+    pub fn assign(&mut self, name: Token, value: Literal) -> Result<(), RuntimeBreak> {
         if self.values.contains_key(&name.lexeme) {
             self.values.insert(name.lexeme, value);
             Ok(())
         } else if let Some(ref mut enc) = self.enclosing {
-            enc.assign(name, value)
+            enc.borrow_mut().assign(name, value)
         } else {
-            Err(RuntimeError {
+            Err(RuntimeBreak::RuntimeErrorBreak(RuntimeError {
                 token: name.clone(),
                 message: format!("Undefined variable '{}'.", &name.lexeme),
-            })
+            }))
         }
     }
 
@@ -52,7 +55,7 @@ impl Environment {
         }
         // recursively search for the variable in enclosing environment
         else if let Some(ref enc) = self.enclosing {
-            enc.get(name)
+            enc.borrow().get(name)
         } else {
             Err(RuntimeError {
                 token: name.clone(),

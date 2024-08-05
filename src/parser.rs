@@ -7,11 +7,13 @@ use crate::error::ParseError;
 #[derive(Debug, PartialEq, Clone)]
 pub enum Stmt {
     ExprStmt(Expr),
+    FuncDeclStmt(FuncDecl),
     PrintStmt(Expr),
     ForStmt(Box<For>),
     IfStmt(Box<If>),
     WhileStmt(Box<While>),
-    VarStmt(Var),
+    VarDeclStmt(VarDecl),
+    ReturnStmt(Return),
     BlockStmt(Block),
 }
 
@@ -19,6 +21,7 @@ pub enum Stmt {
 pub enum Expr {
     AssignExpr(Box<Assignment>),
     BinaryExpr(Box<Binary>),
+    CallExpr(Box<Call>),
     GroupingExpr(Box<Grouping>),
     UnaryExpr(Box<Unary>),
     VarExpr(Box<Variable>),
@@ -38,10 +41,25 @@ pub struct Assignment {
 }
 
 #[derive(Debug, PartialEq, Clone)]
+// paren is used to find the location of errors related to function calls
+pub struct Call {
+    pub callee: Expr,
+    pub paren: Token,
+    pub arguments: Option<Vec<Expr>>,
+}
+
+#[derive(Debug, PartialEq, Clone)]
 pub struct Logic {
     pub left: Expr,
     pub operator: Token,
     pub right: Expr,
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub struct FuncDecl {
+    pub name: Token,
+    pub params: Vec<Token>,
+    pub body: Vec<Stmt>,
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -53,7 +71,7 @@ pub struct If {
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct For {
-    pub initialiser: Var,
+    pub initialiser: VarDecl,
     pub condition: Stmt,
     pub increment: Option<Expr>,
     pub body: Stmt,
@@ -66,9 +84,15 @@ pub struct While {
 }
 
 #[derive(Debug, PartialEq, Clone)]
-pub struct Var {
+pub struct VarDecl {
     pub name: Token,
     pub initialiser: Expr,
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub struct Return {
+    pub keyword: Token,
+    pub value: Expr,
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -145,6 +169,8 @@ impl Parser {
     fn statement(&mut self) -> Result<Stmt, ParseError> {
         if self.matches(&[Print]) {
             self.print_statement()
+        } else if self.matches(&[Return]) {
+            self.return_statement()
         } else if self.matches(&[While]) {
             self.while_statement()
         } else if self.matches(&[LeftBrace]) {
@@ -265,6 +291,20 @@ impl Parser {
         Ok(Stmt::PrintStmt(value))
     }
 
+    fn return_statement(&mut self) -> Result<Stmt, ParseError> {
+        let keyword = self.previous().clone();
+        let mut value = Expr::LitExpr(Literal::Null);
+
+        // Check if an expression is present
+        // Semicolons can't begin expressions
+        if !self.check(Semicolon) {
+            value = self.expression()?;
+        }
+
+        self.consume(Semicolon, "Expect ';' after return value".to_string())?;
+        Ok(Stmt::ReturnStmt(Return { keyword, value }))
+    }
+
     // varDecl → "var" IDENTIFIER ( "=" expression )? ";" ;
     fn var_declaration(&mut self) -> Result<Stmt, ParseError> {
         let name = self
@@ -281,7 +321,44 @@ impl Parser {
             "Expect ; after variable declaration.".to_string(),
         )?;
 
-        Ok(Stmt::VarStmt(Var { name, initialiser }))
+        Ok(Stmt::VarDeclStmt(VarDecl { name, initialiser }))
+    }
+
+    fn function(&mut self, kind: std::string::String) -> Result<Stmt, ParseError> {
+        let name = self
+            .consume(Identifier, format!("Expect {kind} name"))?
+            .clone();
+        self.consume(LeftParen, format!("Expect '(' after {kind} name"))?;
+
+        let mut parameters: Vec<Token> = vec![];
+
+        if !self.check(RightParen) {
+            loop {
+                parameters.push(
+                    self.consume(Identifier, "Expect identifier name".to_string())?
+                        .clone(),
+                );
+                if !self.matches(&[Comma]) {
+                    break;
+                } else if parameters.len() >= 255 {
+                    return Err(self.error(
+                        self.peek().clone(),
+                        "Can't have more than 255 parameters".to_string(),
+                    ));
+                };
+            }
+        };
+
+        self.consume(RightParen, "Expect ')' after parameters".to_string())?;
+
+        self.consume(LeftBrace, format!("Expect '{{' before {kind} body"))?;
+        let body = self.block()?.statements;
+
+        Ok(Stmt::FuncDeclStmt(FuncDecl {
+            name: name.clone(),
+            params: parameters,
+            body,
+        }))
     }
 
     fn expression_statement(&mut self) -> Result<Stmt, ParseError> {
@@ -355,7 +432,9 @@ impl Parser {
 
     // declaration → varDecl | statement ;
     fn declaration(&mut self) -> Result<Stmt, ParseError> {
-        if self.matches(&[Var]) {
+        if self.matches(&[Fun]) {
+            self.function("function".to_string())
+        } else if self.matches(&[Var]) {
             self.var_declaration()
         } else {
             let stmt_result = self.statement();
@@ -430,8 +509,9 @@ impl Parser {
         Ok(expr)
     }
 
-    // unary → ( "!" | "-" ) unary | primary ;
+    // unary → ( "!" | "-" ) unary | call ;
     // if ! or -, must be unary, recursively call unary to parse operand
+    // matches a primary expression followed by any number of function calls
     fn unary(&mut self) -> Result<Expr, ParseError> {
         if self.matches(&[Bang, Minus]) {
             let operator = self.previous().clone();
@@ -440,7 +520,54 @@ impl Parser {
             return Ok(Expr::UnaryExpr(Box::new(Unary::new(operator, right))));
         }
 
-        self.primary()
+        self.call()
+    }
+
+    // call → primary ( "(" arguments? ")" )* ;
+    fn call(&mut self) -> Result<Expr, ParseError> {
+        let mut expr = self.primary()?;
+
+        // parse call expression with previous expression as callee
+        while self.matches(&[LeftParen]) {
+            expr = self.arguments(expr)?;
+        }
+
+        Ok(expr)
+    }
+
+    // arguments → expression ( "," expression )* ;
+    // also handles zero-arguments case
+    fn arguments(&mut self, callee: Expr) -> Result<Expr, ParseError> {
+        let mut args: Vec<Expr> = vec![];
+
+        let try_arguments = if !self.check(RightParen) {
+            loop {
+                if args.len() >= 255 {
+                    break Err(self.error(
+                        self.peek().clone(),
+                        "Can't have more than 255 arguments".to_string(),
+                    ));
+                }
+                args.push(self.expression()?);
+                if !self.matches(&[Comma]) {
+                    break Ok(Some(args));
+                }
+            }
+        } else {
+            Ok(None)
+        };
+
+        let paren = self.consume(RightParen, "Expect ')' after arguments".to_string())?;
+
+        if let Ok(arguments) = try_arguments {
+            Ok(Expr::CallExpr(Box::new(Call {
+                callee,
+                paren: paren.clone(),
+                arguments,
+            })))
+        } else {
+            Err(try_arguments.unwrap_err())
+        }
     }
 
     fn primary(&mut self) -> Result<Expr, ParseError> {
@@ -492,7 +619,7 @@ impl Parser {
         if self.check(ttype) {
             return Ok(self.advance());
         } else {
-            return Err(self.error(self.peek().clone().clone(), message));
+            return Err(self.error(self.peek().clone(), message));
         }
     }
 
@@ -537,14 +664,14 @@ impl Parser {
             }
 
             match self.peek().ttype {
-                Class => break,
-                Fun => break,
-                Var => break,
-                For => break,
-                If => break,
-                While => break,
-                Print => break,
-                Return => break,
+                TokenType::Class => break,
+                TokenType::Fun => break,
+                TokenType::Var => break,
+                TokenType::For => break,
+                TokenType::If => break,
+                TokenType::While => break,
+                TokenType::Print => break,
+                TokenType::Return => break,
                 _ => (),
             }
 

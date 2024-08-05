@@ -1,10 +1,14 @@
 use std::fmt::Display;
 
+use crate::callable::*;
+
 #[derive(Debug, PartialEq, Clone)]
 pub enum Literal {
     String(String),
     Number(f32),
     Bool(bool),
+    Func(Function),
+    NativeFunc(NativeFunction),
     Null,
 }
 
@@ -14,6 +18,8 @@ impl Literal {
             Literal::String(s) => s.to_owned(),
             Literal::Number(n) => n.to_string(),
             Literal::Bool(b) => b.to_string(),
+            Literal::Func(f) => f.to_string(),
+            Literal::NativeFunc(n) => n.to_string(),
             Literal::Null => "nil".to_string(),
         }
     }

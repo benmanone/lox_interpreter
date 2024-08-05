@@ -1,67 +1,80 @@
+use crate::callable::*;
 use crate::environment::*;
-use crate::parser::Assignment;
-use crate::parser::Block;
-use crate::parser::Expr;
-use crate::parser::If;
-use crate::parser::Logic;
-use crate::parser::Stmt;
-use crate::parser::Var;
-use crate::parser::Variable;
-use crate::parser::While;
-use crate::token::{Literal, TokenType};
-use crate::RuntimeError;
+use crate::error::*;
+use crate::parser::*;
+use crate::token::Literal;
+use crate::token::TokenType;
 use std::cell::RefCell;
 use std::rc::Rc;
 
 pub struct Interpreter {
-    environment: Rc<RefCell<Environment>>,
+    pub globals: Rc<RefCell<Environment>>,
+    pub environment: Rc<RefCell<Environment>>,
 }
 
 impl Interpreter {
     pub fn new() -> Self {
+        let globals = Interpreter::insert_native_functions();
+
         Self {
-            // need to use RefCell to legally keep track of data in enclosing environments
-            // now clones of `environment` still reference the same data
-            environment: Rc::new(RefCell::new(Environment::new(None))),
+            environment: globals.clone(),
+            globals,
         }
     }
 
-    pub fn interpret(&mut self, stmts: Vec<Stmt>) -> Result<(), RuntimeError> {
+    fn insert_native_functions() -> Rc<RefCell<Environment>> {
+        let globals = Rc::new(RefCell::new(Environment::new(None)));
+        globals.borrow_mut().define(
+            "clock".to_string(),
+            Literal::NativeFunc(NativeFunction::Clock),
+        );
+        globals
+    }
+
+    pub fn interpret(&mut self, stmts: Vec<Stmt>) -> Result<(), RuntimeBreak> {
         for stmt in stmts {
             self.execute(stmt)?;
         }
         Ok(())
     }
 
-    fn execute(&mut self, stmt: Stmt) -> Result<Literal, RuntimeError> {
+    fn execute(&mut self, stmt: Stmt) -> Result<(), RuntimeBreak> {
         match stmt {
-            Stmt::ExprStmt(expr) => self.evaluate(expr),
+            Stmt::ExprStmt(expr) => match self.evaluate(expr) {
+                Ok(_l) => Ok(()),
+                Err(err) => Err(err),
+            },
             Stmt::PrintStmt(expr) => self.eval_print_stmt(expr),
             Stmt::IfStmt(ifstmt) => self.eval_if_stmt(*ifstmt),
             Stmt::WhileStmt(whilestmt) => self.eval_while_stmt(*whilestmt),
-            Stmt::VarStmt(var) => self.eval_var_stmt(var),
+            Stmt::VarDeclStmt(var) => self.eval_var_decl_stmt(var),
+            Stmt::FuncDeclStmt(func) => self.eval_func_decl_stmt(func),
+            Stmt::ReturnStmt(ret) => self.eval_return_stmt(ret),
             Stmt::BlockStmt(block) => self.eval_block(block),
-            _ => Ok(Literal::Null),
+            _ => Ok(()),
         }
     }
 
-    fn execute_block(
+    pub fn execute_block(
         &mut self,
         statements: Vec<Stmt>,
         env: Rc<RefCell<Environment>>,
-    ) -> Result<Literal, RuntimeError> {
-        let previous = self.environment.clone();
+    ) -> Result<(), RuntimeBreak> {
+        let previous = Rc::clone(&self.environment);
         self.environment = env;
 
         for stmt in statements {
-            self.execute(stmt)?;
+            if let Err(e) = self.execute(stmt) {
+                self.environment = previous;
+                return Err(e);
+            }
         }
 
         self.environment = previous;
-        Ok(Literal::Null)
+        Ok(())
     }
 
-    fn evaluate(&mut self, expression: Expr) -> Result<Literal, RuntimeError> {
+    fn evaluate(&mut self, expression: Expr) -> Result<Literal, RuntimeBreak> {
         match expression {
             Expr::GroupingExpr(g) => self.evaluate(g.expression),
             Expr::BinaryExpr(b) => self.eval_binary(*b),
@@ -69,15 +82,21 @@ impl Interpreter {
             Expr::VarExpr(v) => self.eval_var(*v),
             Expr::AssignExpr(a) => self.eval_assign(*a),
             Expr::LogicExpr(l) => self.eval_logic(*l),
+            Expr::CallExpr(c) => self.eval_call(*c),
             Expr::LitExpr(l) => Ok(l),
         }
     }
 
-    fn eval_block(&mut self, block: Block) -> Result<Literal, RuntimeError> {
-        self.execute_block(block.statements, self.environment.clone())
+    fn eval_block(&mut self, block: Block) -> Result<(), RuntimeBreak> {
+        self.execute_block(
+            block.statements,
+            Rc::new(RefCell::new(Environment::new(Some(
+                self.environment.clone(),
+            )))),
+        )
     }
 
-    fn eval_assign(&mut self, assignment: Assignment) -> Result<Literal, RuntimeError> {
+    fn eval_assign(&mut self, assignment: Assignment) -> Result<Literal, RuntimeBreak> {
         let value = self.evaluate(assignment.value)?;
         self.environment
             .borrow_mut()
@@ -86,11 +105,14 @@ impl Interpreter {
         Ok(value)
     }
 
-    fn eval_var(&self, var: Variable) -> Result<Literal, RuntimeError> {
-        self.environment.borrow_mut().get(var.name)
+    fn eval_var(&self, var: Variable) -> Result<Literal, RuntimeBreak> {
+        match self.environment.borrow_mut().get(var.name) {
+            Ok(l) => Ok(l),
+            Err(re) => Err(RuntimeBreak::RuntimeErrorBreak(re)),
+        }
     }
 
-    fn eval_logic(&mut self, logic: Logic) -> Result<Literal, RuntimeError> {
+    fn eval_logic(&mut self, logic: Logic) -> Result<Literal, RuntimeBreak> {
         let left = self.evaluate(logic.left)?;
 
         // check to see if it is possible to short circuit (if left is already true in an or statement)
@@ -101,43 +123,109 @@ impl Interpreter {
         }
     }
 
-    fn eval_if_stmt(&mut self, ifstmt: If) -> Result<Literal, RuntimeError> {
+    fn eval_call(&mut self, call: Call) -> Result<Literal, RuntimeBreak> {
+        let callee = self.evaluate(call.callee)?;
+
+        let arguments: Result<Vec<Literal>, RuntimeBreak> = if let Some(args) = call.arguments {
+            args.iter().map(|a| self.evaluate(a.clone())).collect()
+        } else {
+            Ok(vec![])
+        };
+
+        match callee {
+            Literal::Func(f) => match arguments {
+                Ok(args) => {
+                    if f.arity() != args.len() as i32 {
+                        Err(RuntimeBreak::RuntimeErrorBreak(RuntimeError {
+                            token: call.paren,
+                            message: format!(
+                                "Expected {} arguments but got {}",
+                                f.arity(),
+                                args.len()
+                            ),
+                        }))
+                    } else {
+                        f.call(self, args)
+                    }
+                }
+                Err(err) => Err(err),
+            },
+            Literal::NativeFunc(nf) => match arguments {
+                Ok(args) => {
+                    if nf.arity() != args.len() as i32 {
+                        Err(RuntimeBreak::RuntimeErrorBreak(RuntimeError {
+                            token: call.paren,
+                            message: format!(
+                                "Expected {} arguments but got {}",
+                                nf.arity(),
+                                args.len()
+                            ),
+                        }))
+                    } else {
+                        nf.call(self, args)
+                    }
+                }
+                Err(err) => Err(err),
+            },
+            _ => Err(RuntimeBreak::RuntimeErrorBreak(RuntimeError {
+                token: call.paren,
+                message: "Can only call functions and classes".to_string(),
+            })),
+        }
+    }
+
+    fn eval_if_stmt(&mut self, ifstmt: If) -> Result<(), RuntimeBreak> {
         if self.evaluate(ifstmt.condition)?.is_truthy() {
             self.execute(ifstmt.then_branch)
         } else if ifstmt.else_branch != Stmt::ExprStmt(Expr::LitExpr(Literal::Null)) {
             self.execute(ifstmt.else_branch)
         } else {
-            Ok(Literal::Null)
+            Ok(())
         }
     }
 
-    fn eval_while_stmt(&mut self, whilestmt: While) -> Result<Literal, RuntimeError> {
+    fn eval_while_stmt(&mut self, whilestmt: While) -> Result<(), RuntimeBreak> {
         let condition = whilestmt.condition;
 
         while self.evaluate(condition.clone())?.is_truthy() {
             self.execute(whilestmt.body.clone())?;
         }
-        Ok(Literal::Null)
+        Ok(())
     }
 
-    fn eval_var_stmt(&mut self, var: Var) -> Result<Literal, RuntimeError> {
-        let mut value = Literal::Null;
-
-        if var.initialiser != Expr::LitExpr(Literal::Null) {
-            value = self.evaluate(var.initialiser)?;
-        }
+    fn eval_var_decl_stmt(&mut self, var: VarDecl) -> Result<(), RuntimeBreak> {
+        let value = if var.initialiser != Expr::LitExpr(Literal::Null) {
+            self.evaluate(var.initialiser)?
+        } else {
+            Literal::Null
+        };
 
         self.environment.borrow_mut().define(var.name.lexeme, value);
-        Ok(Literal::Null)
+        Ok(())
     }
 
-    fn eval_print_stmt(&mut self, expr: Expr) -> Result<Literal, RuntimeError> {
+    fn eval_func_decl_stmt(&mut self, func: FuncDecl) -> Result<(), RuntimeBreak> {
+        self.environment
+            .borrow_mut()
+            .define(func.name.lexeme.clone(), Literal::Func(Function::new(func)));
+        Ok(())
+    }
+
+    fn eval_return_stmt(&mut self, ret: Return) -> Result<(), RuntimeBreak> {
+        let mut value = Literal::Null;
+        if ret.value != Expr::LitExpr(Literal::Null) {
+            value = self.evaluate(ret.value)?;
+        }
+        Err(RuntimeBreak::ReturnBreak(ReturnError { value }))
+    }
+
+    fn eval_print_stmt(&mut self, expr: Expr) -> Result<(), RuntimeBreak> {
         let value = self.evaluate(expr)?;
         println!("{}", value.as_string());
-        Ok(value)
+        Ok(())
     }
 
-    fn eval_binary(&mut self, b: crate::parser::Binary) -> Result<Literal, RuntimeError> {
+    fn eval_binary(&mut self, b: crate::parser::Binary) -> Result<Literal, RuntimeBreak> {
         let left = self.evaluate(b.left)?;
         let right = self.evaluate(b.right)?;
 
@@ -150,10 +238,10 @@ impl Interpreter {
                     if right_num != &0.0 {
                         Ok(Literal::Number(left_num / right_num))
                     } else {
-                        Err(RuntimeError {
+                        Err(RuntimeBreak::RuntimeErrorBreak(RuntimeError {
                             token: b.operator,
                             message: "Attempted division by zero".to_string(),
-                        })
+                        }))
                     }
                 }
                 TokenType::Star => Ok(Literal::Number(left_num * right_num)),
@@ -163,10 +251,10 @@ impl Interpreter {
                 TokenType::LessEqual => Ok(Literal::Bool(left_num <= right_num)),
                 TokenType::EqualEqual => Ok(Literal::Bool(self.is_equal(left, right))),
                 TokenType::BangEqual => Ok(Literal::Bool(!self.is_equal(left, right))),
-                _ => Err(RuntimeError {
+                _ => Err(RuntimeBreak::RuntimeErrorBreak(RuntimeError {
                     token: b.operator,
                     message: "Invalid operator used with two numbers".to_string(),
-                }),
+                })),
             },
             (Literal::String(left_str), Literal::String(right_str)) => {
                 match b.operator.ttype {
@@ -175,10 +263,10 @@ impl Interpreter {
                     }
                     TokenType::EqualEqual => Ok(Literal::Bool(self.is_equal(left, right))),
                     TokenType::BangEqual => Ok(Literal::Bool(!self.is_equal(left, right))),
-                    _ => Err(RuntimeError {
+                    _ => Err(RuntimeBreak::RuntimeErrorBreak(RuntimeError {
                         token: b.operator,
                         message: "Invalid operator used with two strings".to_string(),
-                    }),
+                    })),
                 }
                 // implicit conversion of Numbers to Strings for concatenation or comparison
             }
@@ -192,10 +280,10 @@ impl Interpreter {
                 TokenType::BangEqual => Ok(Literal::Bool(
                     !self.is_equal(left, Literal::String(right_num.to_string())),
                 )),
-                _ => Err(RuntimeError {
+                _ => Err(RuntimeBreak::RuntimeErrorBreak(RuntimeError {
                     token: b.operator,
                     message: "Invalid operator used with a string and a number".to_string(),
-                }),
+                })),
             },
             (Literal::Number(left_num), Literal::String(right_str)) => match b.operator.ttype {
                 TokenType::Plus => Ok(Literal::String(left_num.to_string() + right_str.as_str())),
@@ -205,33 +293,33 @@ impl Interpreter {
                 TokenType::BangEqual => Ok(Literal::Bool(
                     !self.is_equal(Literal::String(left_num.to_string()), right),
                 )),
-                _ => Err(RuntimeError {
+                _ => Err(RuntimeBreak::RuntimeErrorBreak(RuntimeError {
                     token: b.operator,
                     message: "Invalid operator used with a number and a string".to_string(),
-                }),
+                })),
             },
             _ => match b.operator.ttype {
                 TokenType::EqualEqual => Ok(Literal::Bool(self.is_equal(left, right))),
                 TokenType::BangEqual => Ok(Literal::Bool(!self.is_equal(left, right))),
-                _ => Err(RuntimeError {
+                _ => Err(RuntimeBreak::RuntimeErrorBreak(RuntimeError {
                     token: b.operator,
                     message: "Operands must be two numbers or two strings.".to_string(),
-                }),
+                })),
             },
         }
     }
 
-    fn eval_unary(&mut self, u: crate::parser::Unary) -> Result<Literal, RuntimeError> {
+    fn eval_unary(&mut self, u: crate::parser::Unary) -> Result<Literal, RuntimeBreak> {
         let right = self.evaluate(u.right)?;
 
         if u.operator.ttype == TokenType::Minus {
             if let Literal::Number(n) = right {
                 return Ok(Literal::Number(-n));
             } else {
-                return Err(RuntimeError {
+                return Err(RuntimeBreak::RuntimeErrorBreak(RuntimeError {
                     token: u.operator,
                     message: "Operand must be number".to_string(),
-                });
+                }));
             }
         } else if u.operator.ttype == TokenType::Bang {
             if let Literal::Bool(_) = right {
@@ -254,5 +342,11 @@ impl Interpreter {
         } else {
             left == right
         }
+    }
+}
+
+impl Default for Interpreter {
+    fn default() -> Self {
+        Self::new()
     }
 }

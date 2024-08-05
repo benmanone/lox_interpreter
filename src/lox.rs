@@ -6,7 +6,7 @@ use crate::stdin;
 use crate::stdout;
 use crate::File;
 use crate::Rc;
-use crate::RuntimeError;
+use crate::RuntimeBreak;
 use crate::Scanner;
 use std::error::Error;
 use std::io::{Read, Write};
@@ -88,10 +88,6 @@ impl Lox {
                 self.error(err);
             }
             Ok(tokens) => {
-                // for t in tokens {
-                //     println!("{}", t);
-                // }
-
                 let mut parser = Parser::new(tokens.clone());
                 let result = parser.parse();
 
@@ -124,8 +120,10 @@ impl Lox {
         self.had_error = true
     }
 
-    fn runtime_error(&mut self, err: RuntimeError) {
+    fn runtime_error(&mut self, err: RuntimeBreak) {
         println!("{err}");
-        self.had_runtime_error = true;
+        if let RuntimeBreak::RuntimeErrorBreak(_re) = err {
+            self.had_runtime_error = true
+        }
     }
 }

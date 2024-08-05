@@ -1,4 +1,5 @@
-use std::fmt::{Debug, Display};
+use crate::token::Literal;
+use std::fmt::Display;
 
 use crate::token::{Token, TokenType};
 
@@ -47,19 +48,37 @@ impl Display for ParseError {
 impl std::error::Error for ParseError {}
 
 #[derive(Debug)]
+pub enum RuntimeBreak {
+    RuntimeErrorBreak(RuntimeError),
+    ReturnBreak(ReturnError),
+}
+
+impl Display for RuntimeBreak {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RuntimeBreak::RuntimeErrorBreak(re) => {
+                write!(
+                    f,
+                    "Runtime error at {:?}: {} [line {}]",
+                    re.token.ttype, re.message, re.token.line
+                )
+            }
+            RuntimeBreak::ReturnBreak(re) => {
+                write!(f, "Value returned: {:#?}", re.value)
+            }
+        }
+    }
+}
+
+impl std::error::Error for RuntimeBreak {}
+
+#[derive(Debug)]
 pub struct RuntimeError {
     pub token: Token,
     pub message: String,
 }
 
-impl Display for RuntimeError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "Runtime error at {:?}: {} [line {}]",
-            self.token.ttype, self.message, self.token.line
-        )
-    }
+#[derive(Debug)]
+pub struct ReturnError {
+    pub value: Literal,
 }
-
-impl std::error::Error for RuntimeError {}
